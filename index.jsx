@@ -52,6 +52,7 @@ export default createReactClass({
   },
 
   getInitialState: function() {
+    var self = this
     var allDimensions = this.props.dimensions
     var activeDimensions =  _.filter(this.props.activeDimensions, function (title) {
       return _.find(allDimensions, function(col) {
@@ -62,6 +63,17 @@ export default createReactClass({
     // Initialize sortStack from prop or convert legacy sortBy/sortDir
     var sortStack = this.props.sortStack.length > 0 ? this.props.sortStack :
                     (this.props.sortBy ? [{title: this.props.sortBy, direction: this.props.sortDir}] : [])
+
+    // Clean sortStack to remove any calculation columns (e.g., from persisted state)
+    // Only dimension columns are allowed in multi-column sort
+    if (sortStack.length > 0) {
+      sortStack = sortStack.filter(function(sortItem) {
+        var dimension = _.find(allDimensions, function(dim) {
+          return dim.title === sortItem.title
+        })
+        return dimension !== undefined
+      })
+    }
 
     return {
       dimensions: activeDimensions,
@@ -234,18 +246,17 @@ export default createReactClass({
     if (!sortStack || sortStack.length === 0) return []
     if (!columns || columns.length === 0) return []
     
-    // Filter out sort entries for columns that don't exist
+    // Filter: keep only dimension columns that exist
+    // Multi-column sort only makes sense for dimensions (hierarchical structure)
+    // Calculations are aggregates available at all levels
     var validSortStack = sortStack.filter(function(sortItem) {
-      return _.find(columns, function(col) {
+      var col = _.find(columns, function(col) {
         return col.title === sortItem.title
       })
+      return col && col.type === 'dimension'
     })
     
-    // If all sorts were invalid, fallback to first column with asc direction
-    if (validSortStack.length === 0 && columns.length > 0) {
-      return [{ title: columns[0].title, direction: 'asc' }]
-    }
-    
+    // Empty sortStack is valid - means single-column sort via DataFrame
     return validSortStack
   },
 
@@ -341,9 +352,21 @@ export default createReactClass({
 
   setSort: function(cTitle, shiftKey) {
     var sortStack = this.state.sortStack.slice()
+    var columns = this.getColumns()
+    var clickedCol = _.find(columns, function(col) {
+      return col.title === cTitle
+    })
+    var newDirection = 'asc'  // Default direction for new sorts
     
     if (shiftKey) {
       // Shift-click: toggle membership in stack
+      // Only allow dimension columns in multi-column sort stack
+      
+      // Ignore shift+click on calculation columns
+      if (!clickedCol || clickedCol.type !== 'dimension') {
+        return
+      }
+      
       var existingIndex = -1
       for (var i = 0; i < sortStack.length; i++) {
         if (sortStack[i].title === cTitle) {
@@ -373,8 +396,22 @@ export default createReactClass({
         // Column is in stack, toggle its direction
         sortStack[existingIndex].direction = sortStack[existingIndex].direction === 'asc' ? 'desc' : 'asc'
       } else {
-        // Column not in stack, clear stack and add this column as single sort
-        sortStack = [{ title: cTitle, direction: 'asc' }]
+        // Column not in stack
+        // For calculation columns, check current sortBy/sortDir to toggle
+        // For dimension columns, start fresh with asc
+        if (clickedCol && clickedCol.type === 'calculation' && this.state.sortBy === cTitle) {
+          // Calculation column being clicked again, toggle direction
+          newDirection = this.state.sortDir === 'asc' ? 'desc' : 'asc'
+        }
+        
+        // Clear stack and set as single sort
+        sortStack = []
+        
+        // For dimensions, we can add to sortStack
+        if (clickedCol && clickedCol.type === 'dimension') {
+          sortStack = [{ title: cTitle, direction: newDirection }]
+        }
+        // For calculations, sortStack stays empty, handled by sortBy/sortDir
       }
     }
     
@@ -383,17 +420,28 @@ export default createReactClass({
       this.props.onSortStackChange(sortStack)
     }
     
-    // Backwards compat: emit legacy events for first item
+    // Determine sortBy and sortDir
+    var sortBy, sortDir
     if (sortStack.length > 0) {
-      this.props.eventBus.emit('sortBy', sortStack[0].title)
-      this.props.eventBus.emit('sortDir', sortStack[0].direction)
+      // Use first item in sortStack (dimension column)
+      sortBy = sortStack[0].title
+      sortDir = sortStack[0].direction
+    } else {
+      // Empty sortStack means calculation column or no sort
+      // Use the clicked column title and computed direction
+      sortBy = cTitle
+      sortDir = newDirection || 'asc'
     }
+    
+    // Backwards compat: emit legacy events
+    this.props.eventBus.emit('sortBy', sortBy)
+    this.props.eventBus.emit('sortDir', sortDir)
     
     var self = this
     this.setState({ 
       sortStack: sortStack, 
-      sortBy: sortStack[0] ? sortStack[0].title : null, 
-      sortDir: sortStack[0] ? sortStack[0].direction : 'asc' 
+      sortBy: sortBy, 
+      sortDir: sortDir
     }, function() {
       self.updateRows()
     })

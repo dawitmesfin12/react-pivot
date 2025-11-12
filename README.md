@@ -147,16 +147,20 @@ See it all together in [example/basic.jsx](https://github.com/davidguttman/react
 
 ## Multi-Column Sorting
 
-ReactPivot supports hierarchical multi-column sorting, allowing you to sort data by multiple columns simultaneously while maintaining the grouped structure.
+ReactPivot supports hierarchical multi-column sorting, allowing you to sort data by multiple **dimension** columns simultaneously while maintaining the grouped structure.
 
 ### User Interaction
 
-- **Shift+Click** any column header to add it to the sort stack (or remove it if already added)
+- **Shift+Click** any **dimension** column header to add it to the sort stack (or remove it if already added)
+- **Shift+Click** on calculation columns is ignored (only dimensions can be in multi-column sort)
 - **Click** a column in the sort stack to toggle its sort direction (asc ↔ desc)
 - **Click** a column not in the sort stack to:
   - Clear the entire sort stack
   - Add the clicked column as a single-column sort (starting with asc)
+  - Works for both dimension and calculation columns
 - Columns in the sort stack are highlighted with a light blue background
+
+**Why only dimensions?** Dimension columns define the hierarchical structure (e.g., State → First Name). Calculation columns (like Amount, Count) are aggregate values that exist at all levels and don't have hierarchical relationships. They can still be used as the primary sort via regular click.
 
 ### API
 
@@ -164,12 +168,22 @@ ReactPivot supports hierarchical multi-column sorting, allowing you to sort data
 <ReactPivot
   sortStack={[
     {title: 'State', direction: 'asc'},
-    {title: 'Amount', direction: 'desc'},
-    {title: 'Transaction Date', direction: 'desc'}
+    {title: 'First Name', direction: 'desc'},
+    {title: 'Transaction Type', direction: 'asc'}
   ]}
   onSortStackChange={(sortStack) => {
     console.log('New sort order:', sortStack)
   }}
+  // ... other props
+/>
+```
+
+**Important:** `sortStack` only accepts **dimension columns**. To sort by calculation columns (like Amount), use the primary sort:
+
+```jsx
+<ReactPivot
+  sortBy="Amount"
+  sortDir="desc"
   // ... other props
 />
 ```
@@ -193,7 +207,7 @@ nPaginateRows | number | items per page setting | 25
 solo | object | active solo filters by dimension | {}
 sortBy | string | (legacy) name of column to use for record sort; use `sortStack` for multi-column | null
 sortDir | string | (legacy) sort direction, either 'asc' or 'desc'; use `sortStack` for multi-column | 'asc'
-sortStack | array | array of `{title: string, direction: 'asc'\|'desc'}` for multi-column sorting | []
+sortStack | array | array of `{title: string, direction: 'asc'\|'desc'}` for multi-column sorting; **dimension columns only** | []
 onSortStackChange | function | callback when sort stack changes, receives new sortStack array | no-op
 tableClassName | string | assign css class to table containing react-pivot elements | ''
 hideDimensionFilter | boolean | do not render the dimension filter | false
