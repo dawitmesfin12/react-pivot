@@ -4,7 +4,7 @@ ReactPivot is a data-grid component with pivot-table-like functionality for data
 
 **Now compatible with React 19+ and modern build tools!**
 
-Demo: [http://davidguttman.github.io/react-pivot/](http://davidguttman.github.io/react-pivot/)
+Demo: [https://dawitmesfin12.github.io/react-pivot/](https://dawitmesfin12.github.io/react-pivot/)
 
 ![Demo](http://i.imgur.com/BhPF2Cv.gif)
 
