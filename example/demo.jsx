@@ -63,6 +63,10 @@ eventBus.on('solo', function(solo) {
   persist('solo', solo)
 })
 
+eventBus.on('sortStack', function(sortStack) {
+  persist('sortStack', sortStack)
+})
+
 var dimensions = [
   {value: 'firstName', title: 'First Name'},
   {value: 'lastName', title: 'Last Name'},
@@ -143,6 +147,7 @@ var Demo = createReactClass({
                       activeDimensions={persistedState.activeDimensions || ['Transaction Type']}
                       sortBy={persistedState.sortBy}
                       sortDir={persistedState.sortDir}
+                      sortStack={persistedState.sortStack}
                       solo={persistedState.solo}
                       hiddenColumns={persistedState.hiddenColumns}
                       eventBus={eventBus}

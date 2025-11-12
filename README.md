@@ -145,6 +145,42 @@ React.render(
 
 See it all together in [example/basic.jsx](https://github.com/davidguttman/react-pivot/blob/master/example/basic.jsx)
 
+## Multi-Column Sorting
+
+ReactPivot supports hierarchical multi-column sorting, allowing you to sort data by multiple columns simultaneously while maintaining the grouped structure.
+
+### User Interaction
+
+- **Shift+Click** any column header to add it to the sort stack (or remove it if already added)
+- **Click** a column in the sort stack to toggle its sort direction (asc ↔ desc)
+- **Click** a column not in the sort stack to:
+  - Clear the entire sort stack
+  - Add the clicked column as a single-column sort (starting with asc)
+- Columns in the sort stack are highlighted with a light blue background
+
+### API
+
+```jsx
+<ReactPivot
+  sortStack={[
+    {title: 'State', direction: 'asc'},
+    {title: 'Amount', direction: 'desc'},
+    {title: 'Transaction Date', direction: 'desc'}
+  ]}
+  onSortStackChange={(sortStack) => {
+    console.log('New sort order:', sortStack)
+  }}
+  // ... other props
+/>
+```
+
+The sort is applied hierarchically at every grouping level, meaning:
+- When grouped by State → First Name, the sort applies within each State
+- Each State's children (First Names) are sorted by the same multi-column criteria
+- This preserves the hierarchical structure while applying consistent sorting
+
+**Note:** For backwards compatibility, the legacy `sortBy` and `sortDir` props still work. If `sortStack` is not provided, a single-column sort will be initialized from `sortBy`/`sortDir`.
+
 ### Optional Arguments ###
 parameter | type | description | default
 --------- | ---- | ----------- | -------
@@ -155,8 +191,10 @@ defaultStyles | boolean | apply default styles from style.css | true
 hiddenColumns | array | columns that should not display | []
 nPaginateRows | number | items per page setting | 25
 solo | object | active solo filters by dimension | {}
-sortBy | string | name of column to use for record sort | null
-sortDir | string | sort direction, either 'asc' or 'desc' | 'asc'
+sortBy | string | (legacy) name of column to use for record sort; use `sortStack` for multi-column | null
+sortDir | string | (legacy) sort direction, either 'asc' or 'desc'; use `sortStack` for multi-column | 'asc'
+sortStack | array | array of `{title: string, direction: 'asc'\|'desc'}` for multi-column sorting | []
+onSortStackChange | function | callback when sort stack changes, receives new sortStack array | no-op
 tableClassName | string | assign css class to table containing react-pivot elements | ''
 hideDimensionFilter | boolean | do not render the dimension filter | false
 hideRows | function | if provided, rows that are passed to the function will not render unless the return value is true | null

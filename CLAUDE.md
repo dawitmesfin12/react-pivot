@@ -14,6 +14,33 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `npm run build-standalone` - Build minified standalone version
 - `npm run remove-dist` - Clean dist directory
 
+## Recent Features
+
+### Multi-Column Hierarchical Sorting (v6.1.0)
+Implemented hierarchical multi-column sorting with shift-click interaction:
+
+**Key Implementation Details:**
+- **State Management**: New `sortStack` state (array of `{title, direction}`)
+- **User Interaction**: 
+  - Shift+Click = add/remove column from stack
+  - Click on column in stack = toggle direction (asc/desc)
+  - Click on column not in stack = clear entire stack & add clicked column as single sort (asc)
+- **Visual Indicators**: Light blue background on sorted columns
+- **Hierarchical Algorithm**: `hierarchicalSort()` and `applyMultiColumnSort()` preserve grouping
+- **Stable Sort**: Uses `_key` as final tie-breaker to prevent jitter
+- **Backwards Compatibility**: Legacy `sortBy`/`sortDir` props convert to single-item `sortStack`
+- **Persistence**: `sortStack` persists via eventBus and localStorage
+
+**Modified Files:**
+- `index.jsx`: Core logic, state, `setSort()`, `updateRows()`, hierarchical sorting functions
+- `lib/pivot-table.jsx`: Header rendering with badges, shift-click detection
+- `style.css`: Badge and multi-sort indicator styles
+- `example/demo.jsx`: Demo integration with persistence
+- `README.md`: API documentation and usage examples
+- `TESTING.md`: Comprehensive test cases
+
+**Testing:** Run `npm run example` and see TESTING.md for detailed test cases
+
 ## Project Architecture
 
 ### Core Component Structure

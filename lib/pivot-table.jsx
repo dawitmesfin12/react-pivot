@@ -15,6 +15,7 @@ export default createReactClass({
       rows: [],
       sortBy: null,
       sortDir: 'asc',
+      sortStack: [],
       onSort: function () {},
       onSolo: function () {},
       onColumnHide: function () {},
@@ -53,14 +54,34 @@ export default createReactClass({
   renderTableHead: function(columns) {
     var self = this
     var sortBy = this.props.sortBy
-    var sortDir =  this.props.sortDir
+    var sortDir = this.props.sortDir
+    var sortStack = this.props.sortStack || []
 
     return (
       <thead>
         <tr>
           { columns.map(function(col) {
-            var className = col.className
-            if (col.title === sortBy) className += ' ' + sortDir
+            var sortIndex = -1
+            for (var i = 0; i < sortStack.length; i++) {
+              if (sortStack[i].title === col.title) {
+                sortIndex = i
+                break
+              }
+            }
+            var isSorted = sortIndex >= 0
+            var sortInfo = isSorted ? sortStack[sortIndex] : null
+
+            var className = col.className || ''
+            
+            // Legacy: if no sortStack, use sortBy/sortDir
+            if (sortStack.length === 0 && col.title === sortBy) {
+              className += ' ' + sortDir
+            } else if (isSorted) {
+              className += ' ' + sortInfo.direction
+              if (sortStack.length > 1) {
+                className += ' reactPivot-multiSort'
+              }
+            }
 
             var hide = ''
             if (col.type !== 'dimension') hide = (
@@ -72,7 +93,7 @@ export default createReactClass({
 
             return (
               <th className={className}
-                  onClick={partial(self.props.onSort, col.title)}
+                  onClick={function(e) { self.props.onSort(col.title, e.shiftKey) }}
                   style={{cursor: 'pointer'}}
                   key={col.title}>
 

@@ -39,6 +39,8 @@ export default createReactClass({
       hideRows: null,
       sortBy: null,
       sortDir: 'asc',
+      sortStack: [],
+      onSortStackChange: function() {},
       eventBus: new Emitter,
       compact: false,
       excludeSummaryFromExport: false,
@@ -57,11 +59,16 @@ export default createReactClass({
       })
     })
 
+    // Initialize sortStack from prop or convert legacy sortBy/sortDir
+    var sortStack = this.props.sortStack.length > 0 ? this.props.sortStack :
+                    (this.props.sortBy ? [{title: this.props.sortBy, direction: this.props.sortDir}] : [])
+
     return {
       dimensions: activeDimensions,
       calculations: {},
       sortBy: this.props.sortBy,
       sortDir: this.props.sortDir,
+      sortStack: sortStack,
       hiddenColumns: this.props.hiddenColumns,
       solo: this.props.solo,
       filtersPaused: false,
@@ -85,7 +92,7 @@ export default createReactClass({
   componentDidUpdate: function(prevProps) {
      if(this.props.hiddenColumns !== prevProps.hiddenColumns) {
          this.setHiddenColumns(this.props.hiddenColumns);
-     }
+      }
 
     if(this.props.rows !== prevProps.rows) {
       this.dataFrame = DataFrame({
@@ -96,9 +103,13 @@ export default createReactClass({
 
       this.updateRows()
     }
-
+ 
     if (this.props.solo !== prevProps.solo) {
       this.setState({solo: this.props.solo}, this.updateRows)
+    }
+
+    if (this.props.sortStack !== prevProps.sortStack && this.props.sortStack.length > 0) {
+      this.setState({ sortStack: this.props.sortStack }, this.updateRows)
     }
   },
 
@@ -181,6 +192,7 @@ export default createReactClass({
           rows={this.state.rows}
           sortBy={this.state.sortBy}
           sortDir={this.state.sortDir}
+          sortStack={this.state.sortStack}
           onSort={this.setSort}
           onColumnHide={this.hideColumn}
           nPaginateRows={this.props.nPaginateRows}
@@ -198,14 +210,16 @@ export default createReactClass({
 
   updateRows: function () {
     var columns = this.getColumns()
+    var sortStack = this.state.sortStack || []
+    var hideRows = this.state.hideRows
 
-    var sortByTitle = this.state.sortBy
+    // For backwards compatibility, use sortBy/sortDir if sortStack is empty
+    var sortByTitle = sortStack.length > 0 ? sortStack[0].title : this.state.sortBy
     var sortCol = _.find(columns, function(col) {
       return col.title === sortByTitle
     }) || {}
     var sortBy = sortCol.sortBy || (sortCol.type === 'dimension' ? sortCol.title : sortCol.value);
-    var sortDir = this.state.sortDir
-    var hideRows = this.state.hideRows
+    var sortDir = sortStack.length > 0 ? sortStack[0].direction : this.state.sortDir
 
     var calcOpts = {
       dimensions: this.state.dimensions,
@@ -218,9 +232,15 @@ export default createReactClass({
       calcOpts.filter = createSoloFilter(this.state.solo, this.state.dimensions)
     }
 
-    var rows = this.dataFrame
-      .calculate(calcOpts)
-      .filter(function (row) { return hideRows ? !hideRows(row) : true })
+    var rows = this.dataFrame.calculate(calcOpts)
+    
+    // Apply multi-column sorting if sortStack has multiple items
+    // We can do this by sorting siblings at each level while preserving hierarchy
+    if (sortStack.length > 1) {
+      rows = this.applyHierarchicalMultiSort(rows, sortStack, columns)
+    }
+    
+    rows = rows.filter(function (row) { return hideRows ? !hideRows(row) : true })
 
     this.setState({rows: rows})
     this.props.onData(rows)
@@ -238,20 +258,239 @@ export default createReactClass({
     setTimeout(this.updateRows, 0)
   },
 
-  setSort: function(cTitle) {
-    var sortBy = this.state.sortBy
-    var sortDir = this.state.sortDir
-    if (sortBy === cTitle) {
-      sortDir = (sortDir === 'asc') ? 'desc' : 'asc'
+  setSort: function(cTitle, shiftKey) {
+    var sortStack = this.state.sortStack.slice()
+    
+    if (shiftKey) {
+      // Shift-click: toggle membership in stack
+      var existingIndex = -1
+      for (var i = 0; i < sortStack.length; i++) {
+        if (sortStack[i].title === cTitle) {
+          existingIndex = i
+          break
+        }
+      }
+      
+      if (existingIndex >= 0) {
+        // Remove from stack
+        sortStack.splice(existingIndex, 1)
+      } else {
+        // Add to stack with default asc direction
+        sortStack.push({ title: cTitle, direction: 'asc' })
+      }
     } else {
-      sortBy = cTitle
-      sortDir = 'asc'
+      // Regular click
+      var existingIndex = -1
+      for (var i = 0; i < sortStack.length; i++) {
+        if (sortStack[i].title === cTitle) {
+          existingIndex = i
+          break
+        }
+      }
+      
+      if (existingIndex >= 0) {
+        // Column is in stack, toggle its direction
+        sortStack[existingIndex].direction = sortStack[existingIndex].direction === 'asc' ? 'desc' : 'asc'
+      } else {
+        // Column not in stack, clear stack and add this column as single sort
+        sortStack = [{ title: cTitle, direction: 'asc' }]
+      }
     }
+    
+    this.props.eventBus.emit('sortStack', sortStack)
+    if (this.props.onSortStackChange) {
+      this.props.onSortStackChange(sortStack)
+    }
+    
+    // Backwards compat: emit legacy events for first item
+    if (sortStack.length > 0) {
+      this.props.eventBus.emit('sortBy', sortStack[0].title)
+      this.props.eventBus.emit('sortDir', sortStack[0].direction)
+    }
+    
+    var self = this
+    this.setState({ 
+      sortStack: sortStack, 
+      sortBy: sortStack[0] ? sortStack[0].title : null, 
+      sortDir: sortStack[0] ? sortStack[0].direction : 'asc' 
+    }, function() {
+      self.updateRows()
+    })
+  },
 
-    this.props.eventBus.emit('sortBy', sortBy)
-    this.props.eventBus.emit('sortDir', sortDir)
-    this.setState({sortBy: sortBy, sortDir: sortDir})
-    setTimeout(this.updateRows, 0)
+  applyHierarchicalMultiSort: function(rows, sortStack, columns) {
+    if (rows.length === 0 || sortStack.length === 0) return rows.slice()
+    
+    var self = this
+    
+    // Helper: get sort value for a row, respecting dimension availability at row's level
+    function getSortValue(row, columnTitle) {
+      var col = _.find(columns, function(c) { return c.title === columnTitle })
+      if (!col) return row._key
+      
+      var value
+      if (col.type === 'dimension') {
+        // Dimensions are only available at their level and below
+        var dimensionIndex = -1
+        for (var i = 0; i < self.state.dimensions.length; i++) {
+          if (self.state.dimensions[i] === columnTitle) {
+            dimensionIndex = i
+            break
+          }
+        }
+        value = (dimensionIndex >= 0 && dimensionIndex <= row._level) ? row[col.title] : null
+      } else {
+        value = getValue(col, row)
+      }
+      
+      // Normalize for comparison
+      if (value == null) return null
+      if (!isNaN(parseFloat(value)) && isFinite(value)) return +value
+      if (typeof value === 'string') return value.toLowerCase()
+      return value
+    }
+    
+    // Helper: extract dimension-value pairs from key
+    function extractDimensionPairs(key) {
+      var normalized = key.replace(/ÿ+$/, '')
+      var segments = normalized.split('ÿ').filter(function(s) { return s.length > 0 })
+      var pairs = {}
+      for (var i = 0; i < segments.length; i += 2) {
+        if (i + 1 < segments.length) {
+          pairs[segments[i]] = segments[i + 1]
+        }
+      }
+      return pairs
+    }
+    
+    // Helper: check if candidate is a parent of row by matching dimension values
+    function candidateMatchesAsParent(candidate, row) {
+      if (candidate._level !== row._level - 1) return false
+      
+      var candidatePairs = extractDimensionPairs(candidate._key)
+      var rowPairs = extractDimensionPairs(row._key)
+      
+      if (Object.keys(candidatePairs).length >= Object.keys(rowPairs).length) return false
+      
+      for (var dim in candidatePairs) {
+        if (rowPairs[dim] !== candidatePairs[dim]) return false
+      }
+      return true
+    }
+    
+    // Build parent-child map
+    var childrenByParent = {}
+    var rootRows = []
+    
+    rows.forEach(function(row) {
+      if (row._level === 0) {
+        rootRows.push(row)
+        childrenByParent[row._key] = []
+      }
+    })
+    
+    // Find parent for each non-root row
+    var parentMissing = false
+    rows.forEach(function(row) {
+      if (row._level === 0 || parentMissing) return
+      
+      var bestMatch = null
+      var bestMatchDimensionCount = -1
+      var targetLevel = row._level - 1
+      
+      for (var i = 0; i < rows.length; i++) {
+        var candidate = rows[i]
+        if (candidate._level !== targetLevel) continue
+        
+        if (candidateMatchesAsParent(candidate, row)) {
+          var dimensionCount = Object.keys(extractDimensionPairs(candidate._key)).length
+          if (dimensionCount > bestMatchDimensionCount) {
+            bestMatch = candidate
+            bestMatchDimensionCount = dimensionCount
+          }
+        }
+      }
+      
+      if (bestMatch) {
+        var parentKey = bestMatch._key
+        if (!childrenByParent[parentKey]) {
+          childrenByParent[parentKey] = []
+        }
+        childrenByParent[parentKey].push(row)
+      } else {
+        parentMissing = true
+      }
+    })
+    
+    if (parentMissing) {
+      console.error('Could not find parents for some rows. Skipping multi-column sort.')
+      return rows.slice()
+    }
+    
+    // Build reverse mapping: row key -> parent key (for sibling verification)
+    var parentKeyByRowKey = {}
+    for (var parentKey in childrenByParent) {
+      childrenByParent[parentKey].forEach(function(child) {
+        parentKeyByRowKey[child._key] = parentKey
+      })
+    }
+    rootRows.forEach(function(row) {
+      parentKeyByRowKey[row._key] = null
+    })
+    
+    // Compare function: only compares siblings (rows with same parent)
+    function compareRows(a, b) {
+      if (a._level !== b._level || parentKeyByRowKey[a._key] !== parentKeyByRowKey[b._key]) {
+        return 0
+      }
+      
+      // Apply sort stack
+      for (var i = 0; i < sortStack.length; i++) {
+        var sortItem = sortStack[i]
+        var aVal = getSortValue(a, sortItem.title)
+        var bVal = getSortValue(b, sortItem.title)
+        
+        if (aVal === null && bVal === null) continue
+        if (aVal === null) return 1
+        if (bVal === null) return -1
+        
+        var comparison = (aVal < bVal) ? -1 : (aVal > bVal) ? 1 : 0
+        if (comparison !== 0) {
+          return sortItem.direction === 'desc' ? -comparison : comparison
+        }
+      }
+      
+      // Stable sort tie-breaker
+      return (a._key < b._key) ? -1 : (a._key > b._key) ? 1 : 0
+    }
+    
+    // Recursively build sorted result
+    var result = []
+    var addedRows = {}
+    
+    function addSortedRow(row) {
+      if (addedRows[row._key]) return
+      
+      result.push(row)
+      addedRows[row._key] = true
+      
+      var children = childrenByParent[row._key] || []
+      if (children.length > 0) {
+        children.sort(compareRows)
+        children.forEach(addSortedRow)
+      }
+    }
+    
+    rootRows.sort(compareRows)
+    rootRows.forEach(addSortedRow)
+    
+    // Safety check: ensure all rows preserved
+    if (result.length !== rows.length) {
+      console.error('Hierarchical sort lost rows. Expected:', rows.length, 'Got:', result.length)
+      return rows.slice()
+    }
+    
+    return result
   },
 
   setSolo: function(solo) {
@@ -520,6 +759,10 @@ th:hover .reactPivot-hideColumn {
 
 .reactPivot-paginate {
   margin-top: 24px;
+}
+
+.reactPivot-results th.reactPivot-multiSort {
+  background-color: #e3f2fd;
 }`
   
   const style = document.createElement('style')
