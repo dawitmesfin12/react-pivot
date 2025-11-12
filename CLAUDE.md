@@ -10,9 +10,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `npm run example-persist` - Run persistence example
 
 ### Building
-- `npm run dist` - Build standalone distribution file
-- `npm run build-standalone` - Build minified standalone version
-- `npm run remove-dist` - Clean dist directory
+- `npm run build` - Build library distribution files (ES and UMD)
+- `npm run build:demo` - Build demo site for GitHub Pages
+
+### Deployment
+The demo automatically deploys to GitHub Pages via GitHub Actions:
+- Workflow: `.github/workflows/deploy-demo.yml`
+- Triggers: Push to any branch
+- Output: `https://dawitmesfin12.github.io/react-pivot/`
+- Each push overwrites the previous deployment (no per-branch previews)
+- First-time setup: Enable GitHub Pages in repo Settings → Pages, source: `gh-pages` branch
 
 ## Recent Features
 
@@ -40,6 +47,14 @@ Implemented hierarchical multi-column sorting with shift-click interaction:
 - `TESTING.md`: Comprehensive test cases
 
 **Testing:** Run `npm run example` and see TESTING.md for detailed test cases
+
+**Bug Fixes (Post v6.1.0):**
+- Fixed critical bug where multi-column sorting broke after dimension changes
+- Added `cleanSortStack()` helper to validate sortStack against current columns
+- Enhanced `setDimensions()` and `setHiddenColumns()` to clean sortStack when columns change
+- Improved `applyHierarchicalMultiSort()` with comprehensive edge case handling
+- Added defensive null checks throughout hierarchical sorting algorithm
+- Updated `componentDidUpdate()` to handle dimension prop changes with sortStack validation
 
 ## Project Architecture
 

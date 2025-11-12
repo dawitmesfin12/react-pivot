@@ -103,6 +103,28 @@ export default createReactClass({
 
       this.updateRows()
     }
+    
+    // Handle dimension prop changes - need to validate sortStack
+    if (this.props.dimensions !== prevProps.dimensions) {
+      var self = this
+      this.dataFrame = DataFrame({
+        rows: this.props.rows,
+        dimensions: this.props.dimensions,
+        reduce: this.props.reduce
+      })
+      
+      // Validate sortStack against new dimensions
+      var columns = this.getColumns()
+      var cleanedSortStack = this.cleanSortStack(this.state.sortStack, columns)
+      
+      if (JSON.stringify(cleanedSortStack) !== JSON.stringify(this.state.sortStack)) {
+        this.setState({ sortStack: cleanedSortStack }, function() {
+          self.updateRows()
+        })
+      } else {
+        this.updateRows()
+      }
+    }
  
     if (this.props.solo !== prevProps.solo) {
       this.setState({solo: this.props.solo}, this.updateRows)
@@ -208,10 +230,37 @@ export default createReactClass({
     return html
   },
 
+  cleanSortStack: function(sortStack, columns) {
+    if (!sortStack || sortStack.length === 0) return []
+    if (!columns || columns.length === 0) return []
+    
+    // Filter out sort entries for columns that don't exist
+    var validSortStack = sortStack.filter(function(sortItem) {
+      return _.find(columns, function(col) {
+        return col.title === sortItem.title
+      })
+    })
+    
+    // If all sorts were invalid, fallback to first column with asc direction
+    if (validSortStack.length === 0 && columns.length > 0) {
+      return [{ title: columns[0].title, direction: 'asc' }]
+    }
+    
+    return validSortStack
+  },
+
   updateRows: function () {
     var columns = this.getColumns()
     var sortStack = this.state.sortStack || []
     var hideRows = this.state.hideRows
+
+    // Validate sortStack against current columns
+    var validatedSortStack = this.cleanSortStack(sortStack, columns)
+    if (validatedSortStack.length !== sortStack.length) {
+      // sortStack was cleaned, update state
+      sortStack = validatedSortStack
+      this.setState({ sortStack: sortStack })
+    }
 
     // For backwards compatibility, use sortBy/sortDir if sortStack is empty
     var sortByTitle = sortStack.length > 0 ? sortStack[0].title : this.state.sortBy
@@ -247,15 +296,47 @@ export default createReactClass({
   },
 
   setDimensions: function (updatedDimensions) {
+    var self = this
     this.props.eventBus.emit('activeDimensions', updatedDimensions)
-    this.setState({dimensions: updatedDimensions})
-    setTimeout(this.updateRows, 0)
+    
+    // Update dimensions first, then clean sortStack based on new columns
+    this.setState({dimensions: updatedDimensions}, function() {
+      var columns = self.getColumns()
+      var cleanedSortStack = self.cleanSortStack(self.state.sortStack, columns)
+      
+      // If sortStack changed, update it and emit event
+      if (JSON.stringify(cleanedSortStack) !== JSON.stringify(self.state.sortStack)) {
+        self.setState({ sortStack: cleanedSortStack })
+        self.props.eventBus.emit('sortStack', cleanedSortStack)
+        if (self.props.onSortStackChange) {
+          self.props.onSortStackChange(cleanedSortStack)
+        }
+      }
+      
+      setTimeout(self.updateRows, 0)
+    })
   },
 
   setHiddenColumns: function (hidden) {
+    var self = this
     this.props.eventBus.emit('hiddenColumns', hidden)
-    this.setState({hiddenColumns: hidden})
-    setTimeout(this.updateRows, 0)
+    
+    // Update hidden columns first, then clean sortStack based on visible columns
+    this.setState({hiddenColumns: hidden}, function() {
+      var columns = self.getColumns()
+      var cleanedSortStack = self.cleanSortStack(self.state.sortStack, columns)
+      
+      // If sortStack changed, update it and emit event
+      if (JSON.stringify(cleanedSortStack) !== JSON.stringify(self.state.sortStack)) {
+        self.setState({ sortStack: cleanedSortStack })
+        self.props.eventBus.emit('sortStack', cleanedSortStack)
+        if (self.props.onSortStackChange) {
+          self.props.onSortStackChange(cleanedSortStack)
+        }
+      }
+      
+      setTimeout(self.updateRows, 0)
+    })
   },
 
   setSort: function(cTitle, shiftKey) {
@@ -319,14 +400,18 @@ export default createReactClass({
   },
 
   applyHierarchicalMultiSort: function(rows, sortStack, columns) {
-    if (rows.length === 0 || sortStack.length === 0) return rows.slice()
+    // Edge case: empty inputs
+    if (!rows || rows.length === 0) return rows ? rows.slice() : []
+    if (!sortStack || sortStack.length === 0) return rows.slice()
+    if (!columns || columns.length === 0) return rows.slice()
+    if (!this.state.dimensions) return rows.slice()
     
     var self = this
     
     // Helper: get sort value for a row, respecting dimension availability at row's level
     function getSortValue(row, columnTitle) {
       var col = _.find(columns, function(c) { return c.title === columnTitle })
-      if (!col) return row._key
+      if (!col) return null  // Column doesn't exist, return null to sort to end
       
       var value
       if (col.type === 'dimension') {
@@ -352,6 +437,7 @@ export default createReactClass({
     
     // Helper: extract dimension-value pairs from key
     function extractDimensionPairs(key) {
+      if (!key || typeof key !== 'string') return {}
       var normalized = key.replace(/ÿ+$/, '')
       var segments = normalized.split('ÿ').filter(function(s) { return s.length > 0 })
       var pairs = {}
@@ -365,6 +451,8 @@ export default createReactClass({
     
     // Helper: check if candidate is a parent of row by matching dimension values
     function candidateMatchesAsParent(candidate, row) {
+      if (!candidate || !row) return false
+      if (typeof candidate._level === 'undefined' || typeof row._level === 'undefined') return false
       if (candidate._level !== row._level - 1) return false
       
       var candidatePairs = extractDimensionPairs(candidate._key)
@@ -383,15 +471,23 @@ export default createReactClass({
     var rootRows = []
     
     rows.forEach(function(row) {
+      if (!row || typeof row._level === 'undefined' || !row._key) return
       if (row._level === 0) {
         rootRows.push(row)
         childrenByParent[row._key] = []
       }
     })
     
+    // Edge case: no root rows found
+    if (rootRows.length === 0) {
+      console.warn('No root rows found in hierarchical sort. Returning original order.')
+      return rows.slice()
+    }
+    
     // Find parent for each non-root row
     var parentMissing = false
     rows.forEach(function(row) {
+      if (!row || typeof row._level === 'undefined') return
       if (row._level === 0 || parentMissing) return
       
       var bestMatch = null
@@ -400,6 +496,7 @@ export default createReactClass({
       
       for (var i = 0; i < rows.length; i++) {
         var candidate = rows[i]
+        if (!candidate) continue
         if (candidate._level !== targetLevel) continue
         
         if (candidateMatchesAsParent(candidate, row)) {
@@ -423,23 +520,31 @@ export default createReactClass({
     })
     
     if (parentMissing) {
-      console.error('Could not find parents for some rows. Skipping multi-column sort.')
+      console.warn('Could not find parents for some rows. Skipping multi-column sort.')
       return rows.slice()
     }
     
     // Build reverse mapping: row key -> parent key (for sibling verification)
     var parentKeyByRowKey = {}
     for (var parentKey in childrenByParent) {
+      if (!childrenByParent[parentKey]) continue
       childrenByParent[parentKey].forEach(function(child) {
-        parentKeyByRowKey[child._key] = parentKey
+        if (child && child._key) {
+          parentKeyByRowKey[child._key] = parentKey
+        }
       })
     }
     rootRows.forEach(function(row) {
-      parentKeyByRowKey[row._key] = null
+      if (row && row._key) {
+        parentKeyByRowKey[row._key] = null
+      }
     })
     
     // Compare function: only compares siblings (rows with same parent)
     function compareRows(a, b) {
+      if (!a || !b) return 0
+      if (typeof a._level === 'undefined' || typeof b._level === 'undefined') return 0
+      if (!a._key || !b._key) return 0
       if (a._level !== b._level || parentKeyByRowKey[a._key] !== parentKeyByRowKey[b._key]) {
         return 0
       }
@@ -447,6 +552,8 @@ export default createReactClass({
       // Apply sort stack
       for (var i = 0; i < sortStack.length; i++) {
         var sortItem = sortStack[i]
+        if (!sortItem || !sortItem.title) continue
+        
         var aVal = getSortValue(a, sortItem.title)
         var bVal = getSortValue(b, sortItem.title)
         
@@ -469,6 +576,7 @@ export default createReactClass({
     var addedRows = {}
     
     function addSortedRow(row) {
+      if (!row || !row._key) return
       if (addedRows[row._key]) return
       
       result.push(row)
@@ -476,17 +584,26 @@ export default createReactClass({
       
       var children = childrenByParent[row._key] || []
       if (children.length > 0) {
-        children.sort(compareRows)
-        children.forEach(addSortedRow)
+        try {
+          children.sort(compareRows)
+          children.forEach(addSortedRow)
+        } catch (err) {
+          console.warn('Error sorting children:', err)
+        }
       }
     }
     
-    rootRows.sort(compareRows)
-    rootRows.forEach(addSortedRow)
+    try {
+      rootRows.sort(compareRows)
+      rootRows.forEach(addSortedRow)
+    } catch (err) {
+      console.warn('Error in hierarchical sort:', err)
+      return rows.slice()
+    }
     
     // Safety check: ensure all rows preserved
     if (result.length !== rows.length) {
-      console.error('Hierarchical sort lost rows. Expected:', rows.length, 'Got:', result.length)
+      console.warn('Hierarchical sort lost rows. Expected:', rows.length, 'Got:', result.length)
       return rows.slice()
     }
     
